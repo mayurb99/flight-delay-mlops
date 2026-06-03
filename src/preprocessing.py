@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from features import (
     validate_raw_data, create_target,
     engineer_features, get_feature_stats,
+    normalize_columns,
     FEATURE_COLS, TARGET_COL,
 )
 
@@ -80,6 +81,9 @@ def main():
 
     df = pd.read_csv(input_file, low_memory=False)
     logger.info(f"Raw shape: {df.shape}")
+
+    # ── Normalize column names ──────────────────────────
+    df = normalize_columns(df)
 
     # ── Validate ────────────────────────────────────────
     logger.info("Validating raw data...")

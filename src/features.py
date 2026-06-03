@@ -45,6 +45,17 @@ HUB_AIRPORTS = {
 }
 
 
+# Maps column names from this dataset's BTS format to the names the code expects
+COLUMN_ALIASES = {
+    "AIRLINE_CODE": "OP_CARRIER",
+}
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename dataset-specific column names to the canonical names used throughout."""
+    return df.rename(columns={k: v for k, v in COLUMN_ALIASES.items() if k in df.columns})
+
+
 def create_target(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create binary target: 1 if arrival delay >= 15 minutes.
@@ -79,10 +90,10 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame with FEATURE_COLS. If TARGET_COL exists in input
     it is also returned. Row count may decrease (cancelled flights dropped).
     """
-    df = df.copy()
+    df = normalize_columns(df.copy())
 
     # ── 1. Parse date / time features ─────────────────────
-    df["FL_DATE"] = pd.to_datetime(df["FL_DATE"], errors="coerce")
+    df["FL_DATE"] = pd.to_datetime(df["FL_DATE"], dayfirst=True, errors="coerce")
     df["dep_hour"]        = (df["CRS_DEP_TIME"] // 100).clip(0, 23)
     df["dep_day_of_week"] = df["FL_DATE"].dt.dayofweek    # 0=Mon, 6=Sun
     df["dep_month"]       = df["FL_DATE"].dt.month
@@ -159,6 +170,7 @@ def validate_raw_data(df: pd.DataFrame) -> None:
     ------
     ValueError with descriptive message.
     """
+    df = normalize_columns(df)
     # Check required columns
     missing = [c for c in RAW_REQUIRED_COLS if c not in df.columns]
     if missing:

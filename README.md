@@ -77,7 +77,7 @@ export AWS_REGION=us-east-1
 export S3_BUCKET=flight-delay-mlops-mayur    # must be globally unique
 export GH_OWNER=mayurb99
 export GH_REPO=flight-delay-mlops
-export GH_PAT=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    # create at github.com/settings/tokens
+export GH_PAT=PAT    # create at github.com/settings/tokens
 
 bash infra/setup_aws.sh
 ```

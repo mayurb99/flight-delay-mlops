@@ -100,7 +100,7 @@ Step 7: Creating SageMaker Model Package Group...
   │ MLFLOW_TRACKING_URI   = (from DagsHub)
   │ MLFLOW_TRACKING_USERNAME = (DagsHub username)
   │ MLFLOW_TRACKING_PASSWORD = (DagsHub token)
-  │ GH_PAT                = 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
+  │ GH_PAT                = PAT
   └─────────────────────────────────────────────────
 
   To test the S3 trigger:

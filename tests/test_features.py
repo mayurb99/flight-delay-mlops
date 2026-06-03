@@ -22,16 +22,16 @@ from src.features import (
 
 
 def make_raw_row(**kwargs) -> pd.DataFrame:
-    """Build a single-row raw flight DataFrame with valid defaults."""
+    """Build a single-row raw flight DataFrame with valid defaults matching the real dataset schema."""
     defaults = {
-        "FL_DATE":          "2024-02-15",
-        "OP_CARRIER":       "AA",
+        "FL_DATE":          "15-02-2024",   # DD-MM-YYYY as in the real dataset
+        "AIRLINE_CODE":     "AA",           # real dataset uses AIRLINE_CODE, not OP_CARRIER
         "ORIGIN":           "JFK",
         "DEST":             "LAX",
-        "CRS_DEP_TIME":     900,     # 9:00am
+        "CRS_DEP_TIME":     900,
         "CRS_ARR_TIME":     1230,
         "CRS_ELAPSED_TIME": 360,
-        "DISTANCE":         2475,    # miles
+        "DISTANCE":         2475,
         "DEP_DELAY":        5.0,
         "ARR_DELAY":        10.0,
     }
@@ -44,8 +44,8 @@ def make_raw_df(n: int = 300, **overrides) -> pd.DataFrame:
     np.random.seed(42)
     hours = np.random.choice([600, 900, 1200, 1500, 1800, 2100], n)
     df = pd.DataFrame({
-        "FL_DATE":          pd.date_range("2024-01-01", periods=n, freq="1h").strftime("%Y-%m-%d"),
-        "OP_CARRIER":       np.random.choice(["AA","UA","DL","SW","WN"], n),
+        "FL_DATE":          pd.date_range("2024-01-01", periods=n, freq="1h").strftime("%d-%m-%Y"),
+        "AIRLINE_CODE":     np.random.choice(["AA","UA","DL","WN","B6"], n),
         "ORIGIN":           np.random.choice(["JFK","LAX","ORD","ATL","DFW"], n),
         "DEST":             np.random.choice(["SFO","MIA","SEA","BOS","PHX"], n),
         "CRS_DEP_TIME":     hours,
@@ -147,14 +147,14 @@ class TestTimeBucket:
 
 class TestWeekendFlag:
     def test_saturday_is_weekend(self):
-        # 2024-02-17 is Saturday
-        df = make_raw_row(FL_DATE="2024-02-17")
+        # 17-02-2024 is Saturday
+        df = make_raw_row(FL_DATE="17-02-2024")
         result = engineer_features(df)
         assert result["is_weekend"].iloc[0] == 1
 
     def test_monday_is_not_weekend(self):
-        # 2024-02-19 is Monday
-        df = make_raw_row(FL_DATE="2024-02-19")
+        # 19-02-2024 is Monday
+        df = make_raw_row(FL_DATE="19-02-2024")
         result = engineer_features(df)
         assert result["is_weekend"].iloc[0] == 0
 
@@ -170,7 +170,7 @@ class TestHolidaySeason:
         (11, 1), (12, 1),
     ])
     def test_holiday_season_months(self, month, expected):
-        date = f"2024-{month:02d}-15"
+        date = f"15-{month:02d}-2024"
         df = make_raw_row(FL_DATE=date)
         result = engineer_features(df)
         assert result["is_holiday_season"].iloc[0] == expected
@@ -249,7 +249,7 @@ class TestValidateRawData:
         validate_raw_data(df)  # should not raise
 
     def test_missing_column_raises(self):
-        df = make_raw_df(n=200).drop(columns=["OP_CARRIER"])
+        df = make_raw_df(n=200).drop(columns=["AIRLINE_CODE"])
         with pytest.raises(ValueError, match="Missing"):
             validate_raw_data(df)
 

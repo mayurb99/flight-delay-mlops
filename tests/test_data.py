@@ -16,7 +16,7 @@ import numpy as np
 import boto3
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.features import RAW_REQUIRED_COLS, HUB_AIRPORTS
+from src.features import RAW_REQUIRED_COLS, HUB_AIRPORTS, normalize_columns
 
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 S3_KEY    = os.environ.get("S3_KEY",    "data/raw/flights.csv")
@@ -37,6 +37,7 @@ def flight_df():
         pytest.skip(f"Could not download s3://{S3_BUCKET}/{S3_KEY}: {e}")
 
     df = pd.read_csv(path, low_memory=False, nrows=50_000)
+    df = normalize_columns(df)   # maps AIRLINE_CODE → OP_CARRIER etc.
     return df
 
 
