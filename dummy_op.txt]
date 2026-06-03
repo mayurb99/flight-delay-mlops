@@ -1,0 +1,109 @@
+bash infra/setup_aws.sh
+
+════════════════════════════════════════════════════
+  Flight Delay MLOps — AWS Setup
+  Account: 233471821311
+  Region:  us-east-1
+  Bucket:  flight-delay-mlops-mayur
+════════════════════════════════════════════════════
+
+Step 1: Creating S3 bucket...
+  ✓ Bucket already exists: flight-delay-mlops-mayur
+  ✓ Bucket versioning enabled
+  ✓ EventBridge notifications enabled on bucket
+
+Step 2: Creating SageMaker IAM role...
+{                                                                                                                                             
+    "Role": {
+        "Path": "/",
+        "RoleName": "SageMakerExecutionRole-FlightDelay",
+        "RoleId": "AROATMXABIX7SDOSB63TQ",
+        "Arn": "arn:aws:iam::233471821311:role/SageMakerExecutionRole-FlightDelay",
+        "CreateDate": "2026-06-03T08:20:58+00:00",
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "sagemaker.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        },                                                                                                                                    
+        "MaxSessionDuration": 3600,                                                                                                           
+        "RoleLastUsed": {}                                                                                                                    
+    }                                                                                                                                         
+}                                                                                                                                             
+                                                                                                                                              
+  ✓ IAM role already exists: SageMakerExecutionRole-FlightDelay
+  ARN: arn:aws:iam::233471821311:role/SageMakerExecutionRole-FlightDelay
+
+Step 3: Creating Lambda IAM role...
+{                                                                                                                                             
+    "Role": {
+        "Path": "/",
+        "RoleName": "LambdaS3GitHubTrigger-FlightDelay",
+        "RoleId": "AROATMXABIX7V7HAP7GVN",
+        "Arn": "arn:aws:iam::233471821311:role/LambdaS3GitHubTrigger-FlightDelay",
+        "CreateDate": "2026-06-03T08:21:08+00:00",
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "lambda.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        },                                                                                                                                    
+        "MaxSessionDuration": 3600,                                                                                                           
+        "RoleLastUsed": {}                                                                                                                    
+    }                                                                                                                                         
+}                                                                                                                                             
+                                                                                                                                              
+  ✓ Lambda role already exists
+
+Step 4: Storing GitHub PAT in Secrets Manager...
+  ✓ Secret already exists: flight-delay/github-pat (skipping)
+
+Step 5: Deploying Lambda function...
+  ✓ Created Lambda function: flight-delay-s3-trigger
+
+Step 6: Creating EventBridge rule...
+{                                                                                                                                             
+    "Statement": "{\"Sid\":\"EventBridgeS3Trigger\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"lambda:InvokeFunction\",\"Resource\":\"arn:aws:lambda:us-east-1:233471821311:function:flight-delay-s3-trigger\",\"Condition\":{\"ArnLike\":{\"AWS:SourceArn\":\"arn:aws:events:us-east-1:233471821311:rule/flight-delay-s3-data-upload\"}}}"
+}
+
+  ✓ EventBridge rule created and connected to Lambda
+
+Step 7: Creating SageMaker Model Package Group...
+{                                                                                                                                             
+    "ModelPackageGroupArn": "arn:aws:sagemaker:us-east-1:233471821311:model-package-group/flight-delay-model-group"
+}
+
+  ✓ Created model package group
+
+════════════════════════════════════════════════════
+  SETUP COMPLETE!
+
+  Now add these to GitHub Secrets:
+  ┌─────────────────────────────────────────────────
+  │ AWS_ACCESS_KEY_ID     = (your IAM user key)
+  │ AWS_SECRET_ACCESS_KEY = (your IAM user secret)
+  │ AWS_REGION            = us-east-1
+  │ SAGEMAKER_ROLE_ARN    = arn:aws:iam::233471821311:role/SageMakerExecutionRole-FlightDelay
+  │ S3_BUCKET             = flight-delay-mlops-mayur
+  │ MLFLOW_TRACKING_URI   = (from DagsHub)
+  │ MLFLOW_TRACKING_USERNAME = (DagsHub username)
+  │ MLFLOW_TRACKING_PASSWORD = (DagsHub token)
+  │ GH_PAT                = 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
+  └─────────────────────────────────────────────────
+
+  To test the S3 trigger:
+  aws s3 cp your_flights.csv s3://flight-delay-mlops-mayur/data/raw/flights_test.csv
+  Then check GitHub Actions → train.yml should be running
+════════════════════════════════════════════════════

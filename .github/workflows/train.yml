@@ -1,0 +1,93 @@
+name: Train Pipeline — SageMaker
+
+on:
+  workflow_dispatch:
+    inputs:
+      s3_bucket:
+        description: "S3 bucket containing the new data file"
+        required: true
+        type: string
+      s3_key:
+        description: "S3 object key of the new data file (e.g. data/raw/flights_2024_02.csv)"
+        required: true
+        type: string
+      trigger_reason:
+        description: "Why training was triggered (for audit log)"
+        required: false
+        default: "manual"
+        type: string
+
+jobs:
+  train:
+    name: Run SageMaker Training Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Log trigger info
+        run: |
+          echo "Trigger reason : ${{ inputs.trigger_reason }}"
+          echo "S3 data source : s3://${{ inputs.s3_bucket }}/${{ inputs.s3_key }}"
+          echo "Git SHA        : ${{ github.sha }}"
+          echo "Triggered by   : ${{ github.actor }}"
+
+      - name: Pull DVC data
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          pip install "dvc[s3]"
+          dvc pull --no-run-cache || echo "DVC pull warning (continuing)"
+
+      - name: Run data validation before training
+        env:
+          S3_BUCKET: ${{ inputs.s3_bucket }}
+          S3_KEY:    ${{ inputs.s3_key }}
+        run: pytest tests/test_data.py -v --tb=short
+
+      - name: Submit SageMaker Pipeline
+        env:
+          AWS_REGION:               ${{ secrets.AWS_REGION }}
+          SAGEMAKER_ROLE_ARN:       ${{ secrets.SAGEMAKER_ROLE_ARN }}
+          S3_BUCKET:                ${{ inputs.s3_bucket }}
+          S3_DATA_KEY:              ${{ inputs.s3_key }}
+          MLFLOW_TRACKING_URI:      ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+          GH_OWNER:                 ${{ github.repository_owner }}
+          GH_REPO:                  ${{ github.event.repository.name }}
+          GH_PAT:                   ${{ secrets.GH_PAT }}
+          GITHUB_SHA:               ${{ github.sha }}
+        run: python sagemaker/pipeline.py
+
+      - name: Post training summary
+        if: always()
+        run: |
+          echo "## Training Pipeline Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | ${{ inputs.trigger_reason }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Data | s3://${{ inputs.s3_bucket }}/${{ inputs.s3_key }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Git SHA | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | ${{ runner.os }} |" >> $GITHUB_STEP_SUMMARY

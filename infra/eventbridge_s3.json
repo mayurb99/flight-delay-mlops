@@ -1,0 +1,22 @@
+{
+  "_comment": "EventBridge rule: fires when new CSV lands in s3://YOUR_BUCKET/data/raw/",
+  "_setup": "Replace YOUR_BUCKET_NAME with your actual S3 bucket name before deploying",
+  "_deploy": "aws events put-rule --cli-input-json file://infra/eventbridge_s3.json",
+
+  "Name": "flight-delay-s3-data-upload",
+  "Description": "Fires when new flight data CSV is uploaded to S3 data/raw/ prefix",
+  "EventPattern": {
+    "source": ["aws.s3"],
+    "detail-type": ["Object Created"],
+    "detail": {
+      "bucket": {
+        "name": ["YOUR_BUCKET_NAME"]
+      },
+      "object": {
+        "key": [{"prefix": "data/raw/"}]
+      }
+    }
+  },
+  "State": "ENABLED",
+  "EventBusName": "default"
+}
