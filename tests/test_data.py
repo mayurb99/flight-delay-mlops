@@ -89,6 +89,7 @@ class TestDistributions:
         assert flight_df["CRS_DEP_TIME"].std() > 100
 
 
+
 class TestVolume:
     def test_minimum_rows(self, flight_df):
         assert len(flight_df) >= 1000
