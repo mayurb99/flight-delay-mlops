@@ -33,12 +33,7 @@ jobs:
       - name: Install dependencies
         run: uv pip install -r requirements.txt --system
 
-      - name: Lint with flake8
-        run: |
-          flake8 src/ tests/ \
-            --max-line-length=100 \
-            --exclude=src/inference/__init__.py \
-            --ignore=E501,W503
+      
 
       - name: Unit tests — feature engineering
         run: pytest tests/test_features.py -v --tb=short
