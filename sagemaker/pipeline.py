@@ -67,7 +67,7 @@ GITHUB_REPO    = os.environ.get("GH_REPO",             "")
 GITHUB_PAT     = os.environ.get("GH_PAT",              "")
 
 # ── Instance types ──────────────────────────────────────────
-PROCESSING_INSTANCE = "ml.t3.medium"
+PROCESSING_INSTANCE = "ml.m5.xlarge"
 TRAINING_INSTANCE   = "ml.m5.xlarge"
 
 
