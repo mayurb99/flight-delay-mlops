@@ -130,6 +130,7 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
         source_dir           = ".",
         role                 = ROLE_ARN,
         instance_type        = TRAINING_INSTANCE,
+        instance_count       = 1,
         framework_version    = "1.2-1",
         sagemaker_session    = sm_session,
         use_spot_instances   = True,
