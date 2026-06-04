@@ -35,7 +35,9 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 import mlflow
 from mlflow.tracking import MlflowClient
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+for _p in ["/opt/ml/processing/input/deps", os.path.dirname(os.path.abspath(__file__))]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from features import FEATURE_COLS, TARGET_COL
 
 logging.basicConfig(

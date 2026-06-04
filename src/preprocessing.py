@@ -33,8 +33,10 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-# Add src to path so we can import features.py
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# SageMaker injects features.py at /opt/ml/processing/input/deps; locally it's alongside this file
+for _p in ["/opt/ml/processing/input/deps", os.path.dirname(os.path.abspath(__file__))]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from features import (
     validate_raw_data, create_target,
     engineer_features, get_feature_stats,
