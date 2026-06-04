@@ -39,7 +39,7 @@ from sagemaker.workflow.steps import (
 )
 from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
-from sagemaker.workflow.functions import JsonGet
+from sagemaker.workflow.functions import JsonGet, Join
 from sagemaker.workflow.properties import PropertyFile
 from sagemaker.workflow.step_collections import RegisterModel
 from sagemaker.sklearn.estimator import SKLearn
@@ -215,9 +215,14 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
 
     model_metrics = ModelMetrics(
         model_statistics=MetricsSource(
-            s3_uri=evaluation_step.properties
-                .ProcessingOutputConfig.Outputs["eval"].S3Output.S3Uri
-                + "/comparison.json",
+            s3_uri=Join(
+                on="/",
+                values=[
+                    evaluation_step.properties
+                        .ProcessingOutputConfig.Outputs["eval"].S3Output.S3Uri,
+                    "comparison.json",
+                ],
+            ),
             content_type="application/json",
         ),
     )
