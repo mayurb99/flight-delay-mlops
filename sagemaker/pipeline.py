@@ -68,7 +68,7 @@ GITHUB_PAT     = os.environ.get("GH_PAT",              "")
 
 # ── Instance types ──────────────────────────────────────────
 PROCESSING_INSTANCE = "ml.t3.xlarge"
-TRAINING_INSTANCE   = "ml.m5.xlarge"
+TRAINING_INSTANCE   = "ml.t3.xlarge"
 
 
 def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pipeline:
@@ -126,12 +126,15 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
 
     # ── STEP 2: TrainingStep ────────────────────────────────
     estimator = SKLearn(
-        entry_point       = "src/train.py",
-        source_dir        = ".",
-        role              = ROLE_ARN,
-        instance_type     = TRAINING_INSTANCE,
-        framework_version = "1.2-1",
-        sagemaker_session = sm_session,
+        entry_point          = "src/train.py",
+        source_dir           = ".",
+        role                 = ROLE_ARN,
+        instance_type        = TRAINING_INSTANCE,
+        framework_version    = "1.2-1",
+        sagemaker_session    = sm_session,
+        use_spot_instances   = True,
+        max_run              = 3600,   # max 1 hour actual training time
+        max_wait             = 7200,   # max 2 hours total including spot wait
         hyperparameters   = {
             "n-estimators":  n_estimators,
             "max-depth":     max_depth,
