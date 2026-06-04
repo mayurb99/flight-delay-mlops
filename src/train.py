@@ -31,9 +31,13 @@ import subprocess
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import (
@@ -79,7 +83,10 @@ def get_git_sha() -> str:
 
 
 def plot_feature_importance(model, feature_names: list, output_path: str):
-    """Save feature importance bar chart as PNG."""
+    """Save feature importance bar chart as PNG. No-op if matplotlib unavailable."""
+    if not HAS_MATPLOTLIB:
+        logger.warning("matplotlib not available — skipping feature importance chart")
+        return
     importances = model.feature_importances_
     indices     = np.argsort(importances)[::-1]
 
@@ -213,7 +220,8 @@ def main():
         os.makedirs(args.model_dir, exist_ok=True)
         fi_path = os.path.join(args.model_dir, "feature_importance.png")
         plot_feature_importance(model, FEATURE_COLS, fi_path)
-        mlflow.log_artifact(fi_path, artifact_path="charts")
+        if HAS_MATPLOTLIB and os.path.exists(fi_path):
+            mlflow.log_artifact(fi_path, artifact_path="charts")
 
         # ── Save + log model ───────────────────────────
         signature = mlflow.models.infer_signature(X_train, preds_val)
