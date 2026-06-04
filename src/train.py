@@ -24,6 +24,7 @@ import os
 import sys
 import json
 import pickle
+import tarfile
 import logging
 import argparse
 import subprocess
@@ -53,7 +54,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── SageMaker container paths ──────────────────────────
+# ── SageMaker paths — overridable via args for ProcessingStep mode ─
 TRAIN_PATH  = "/opt/ml/input/data/train/train.csv"
 VAL_PATH    = "/opt/ml/input/data/val/val.csv"
 MODEL_DIR   = "/opt/ml/model"
@@ -121,12 +122,17 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE)
     parser.add_argument("--min-samples",   type=int,   default=MIN_SAMPLES)
     parser.add_argument("--random-state",  type=int,   default=RANDOM_STATE)
+    # Path overrides — used when running as ProcessingStep instead of TrainingStep
+    parser.add_argument("--train-path", default=TRAIN_PATH)
+    parser.add_argument("--val-path",   default=VAL_PATH)
+    parser.add_argument("--model-dir",  default=MODEL_DIR)
     args, _ = parser.parse_known_args()
 
     logger.info("=" * 60)
-    logger.info("train.py — SageMaker TrainingStep")
+    logger.info("train.py — SageMaker Pipeline Training")
     logger.info(f"n_estimators={args.n_estimators}  max_depth={args.max_depth}")
     logger.info(f"learning_rate={args.learning_rate}")
+    logger.info(f"train_path={args.train_path}  model_dir={args.model_dir}")
     logger.info("=" * 60)
 
     # ── Configure MLflow ──────────────────────────────
@@ -141,8 +147,8 @@ def main():
 
     # ── Load data ─────────────────────────────────────
     logger.info("Loading training data...")
-    df_train = pd.read_csv(TRAIN_PATH)
-    df_val   = pd.read_csv(VAL_PATH)
+    df_train = pd.read_csv(args.train_path)
+    df_val   = pd.read_csv(args.val_path)
 
     X_train = df_train[FEATURE_COLS]
     y_train = df_train[TARGET_COL]
@@ -204,8 +210,8 @@ def main():
         logger.info(f"Metrics: {json.dumps(metrics, indent=2)}")
 
         # ── Log feature importance chart ───────────────
-        os.makedirs(MODEL_DIR, exist_ok=True)
-        fi_path = os.path.join(MODEL_DIR, "feature_importance.png")
+        os.makedirs(args.model_dir, exist_ok=True)
+        fi_path = os.path.join(args.model_dir, "feature_importance.png")
         plot_feature_importance(model, FEATURE_COLS, fi_path)
         mlflow.log_artifact(fi_path, artifact_path="charts")
 
@@ -215,16 +221,22 @@ def main():
             sk_model        = model,
             artifact_path   = "model",
             signature       = signature,
-            registered_model_name = None,  # registration done by evaluate.py
+            registered_model_name = None,
         )
 
-        # Save model.pkl for SageMaker to package as model.tar.gz
-        model_pkl_path = os.path.join(MODEL_DIR, "model.pkl")
+        # Save model.pkl
+        model_pkl_path = os.path.join(args.model_dir, "model.pkl")
         with open(model_pkl_path, "wb") as f:
             pickle.dump(model, f)
 
+        # Create model.tar.gz — required for SageMaker Model Registry
+        tar_path = os.path.join(args.model_dir, "model.tar.gz")
+        with tarfile.open(tar_path, "w:gz") as tar:
+            tar.add(model_pkl_path, arcname="model.pkl")
+        logger.info(f"Created model.tar.gz: {tar_path}")
+
         # Save metrics.json for evaluate.py (next step)
-        metrics_path = os.path.join(MODEL_DIR, "metrics.json")
+        metrics_path = os.path.join(args.model_dir, "metrics.json")
         with open(metrics_path, "w") as f:
             json.dump({
                 "metrics": metrics,

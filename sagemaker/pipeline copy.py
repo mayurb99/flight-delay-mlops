@@ -35,7 +35,7 @@ from sagemaker.workflow.parameters import (
     ParameterString, ParameterInteger, ParameterFloat,
 )
 from sagemaker.workflow.steps import (
-    ProcessingStep, CacheConfig,
+    ProcessingStep, TrainingStep, CacheConfig,
 )
 from sagemaker.workflow.condition_step import ConditionStep
 from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
@@ -45,6 +45,7 @@ from sagemaker.workflow.step_collections import RegisterModel
 from sagemaker.sklearn.estimator import SKLearn
 from sagemaker.sklearn.processing import SKLearnProcessor
 from sagemaker.processing import ProcessingInput, ProcessingOutput
+from sagemaker.inputs import TrainingInput
 from sagemaker.model_metrics import MetricsSource, ModelMetrics
 
 logging.basicConfig(
@@ -123,14 +124,24 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
         cache_config=cache_config,
     )
 
-    # ── STEP 2: ProcessingStep — train model (avoids TrainingJob quota) ──
-    trainer = SKLearnProcessor(
-        framework_version="1.2-1",
-        role=ROLE_ARN,
-        instance_type=PROCESSING_INSTANCE,
-        instance_count=1,
-        sagemaker_session=sm_session,
-        env={
+    # ── STEP 2: TrainingStep ────────────────────────────────
+    estimator = SKLearn(
+        entry_point          = "src/train.py",
+        source_dir           = ".",
+        role                 = ROLE_ARN,
+        instance_type        = TRAINING_INSTANCE,
+        instance_count       = 1,
+        framework_version    = "1.2-1",
+        sagemaker_session    = sm_session,
+        use_spot_instances   = True,
+        max_run              = 3600,   # max 1 hour actual training time
+        max_wait             = 7200,   # max 2 hours total including spot wait
+        hyperparameters   = {
+            "n-estimators":  n_estimators,
+            "max-depth":     max_depth,
+            "learning-rate": lr,
+        },
+        environment = {
             "MLFLOW_TRACKING_URI":      os.environ.get("MLFLOW_TRACKING_URI", ""),
             "MLFLOW_TRACKING_USERNAME": os.environ.get("MLFLOW_TRACKING_USERNAME", ""),
             "MLFLOW_TRACKING_PASSWORD": os.environ.get("MLFLOW_TRACKING_PASSWORD", ""),
@@ -138,49 +149,19 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
         },
     )
 
-    training_step = ProcessingStep(
+    training_step = TrainingStep(
         name="train-flight-delay-model",
-        processor=trainer,
-        code="src/train.py",
-        inputs=[
-            ProcessingInput(
-                source="src/features.py",
-                destination="/opt/ml/processing/input/deps",
-                input_name="deps",
-            ),
-            ProcessingInput(
-                source=preprocessing_step.properties
+        estimator=estimator,
+        inputs={
+            "train": TrainingInput(
+                s3_data=preprocessing_step.properties
                     .ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
-                destination="/opt/ml/processing/input/train",
-                input_name="train",
             ),
-            ProcessingInput(
-                source=preprocessing_step.properties
+            "val": TrainingInput(
+                s3_data=preprocessing_step.properties
                     .ProcessingOutputConfig.Outputs["val"].S3Output.S3Uri,
-                destination="/opt/ml/processing/input/val",
-                input_name="val",
             ),
-        ],
-        outputs=[
-            ProcessingOutput(
-                output_name="model",
-                source="/opt/ml/processing/output/model",
-            ),
-        ],
-        job_arguments=[
-            "--train-path", "/opt/ml/processing/input/train/train.csv",
-            "--val-path",   "/opt/ml/processing/input/val/val.csv",
-            "--model-dir",  "/opt/ml/processing/output/model",
-        ],
-    )
-
-    # SKLearn object used only to define the inference container for RegisterModel
-    inference_estimator = SKLearn(
-        entry_point="src/train.py",
-        framework_version="1.2-1",
-        role=ROLE_ARN,
-        instance_type=PROCESSING_INSTANCE,
-        sagemaker_session=sm_session,
+        },
     )
 
     # ── STEP 3: ProcessingStep — evaluate vs champion ──────
@@ -214,8 +195,7 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
                 input_name="deps",
             ),
             ProcessingInput(
-                source=training_step.properties
-                    .ProcessingOutputConfig.Outputs["model"].S3Output.S3Uri,
+                source=training_step.properties.ModelArtifacts.S3ModelArtifacts,
                 destination="/opt/ml/processing/input/model",
             ),
             ProcessingInput(
@@ -253,15 +233,8 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
 
     register_step = RegisterModel(
         name="register-challenger",
-        estimator=inference_estimator,
-        model_data=Join(
-            on="/",
-            values=[
-                training_step.properties
-                    .ProcessingOutputConfig.Outputs["model"].S3Output.S3Uri,
-                "model.tar.gz",
-            ],
-        ),
+        estimator=estimator,
+        model_data=training_step.properties.ModelArtifacts.S3ModelArtifacts,
         content_types=["application/json", "text/csv"],
         response_types=["application/json"],
         inference_instances=["ml.t2.medium", "ml.m5.large", "ml.m5.xlarge"],
