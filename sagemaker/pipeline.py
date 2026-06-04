@@ -42,9 +42,8 @@ from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
 from sagemaker.workflow.functions import JsonGet
 from sagemaker.workflow.properties import PropertyFile
 from sagemaker.workflow.step_collections import RegisterModel
-from sagemaker.sklearn.processing import SKLearnProcessor
 from sagemaker.sklearn.estimator import SKLearn
-from sagemaker.processing import ProcessingInput, ProcessingOutput
+from sagemaker.processing import FrameworkProcessor, ProcessingInput, ProcessingOutput
 from sagemaker.inputs import TrainingInput
 from sagemaker.model_metrics import MetricsSource, ModelMetrics
 
@@ -87,7 +86,8 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
     cache_config = CacheConfig(enable_caching=True, expire_after="PT24H")
 
     # ── STEP 1: ProcessingStep — preprocess raw data ───────
-    preprocessor = SKLearnProcessor(
+    preprocessor = FrameworkProcessor(
+        estimator_cls=SKLearn,
         framework_version="1.2-1",
         role=ROLE_ARN,
         instance_type=PROCESSING_INSTANCE,
@@ -156,7 +156,8 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
     )
 
     # ── STEP 3: ProcessingStep — evaluate vs champion ──────
-    evaluator = SKLearnProcessor(
+    evaluator = FrameworkProcessor(
+        estimator_cls=SKLearn,
         framework_version="1.2-1",
         role=ROLE_ARN,
         instance_type=PROCESSING_INSTANCE,
