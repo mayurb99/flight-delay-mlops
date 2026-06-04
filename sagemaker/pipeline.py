@@ -68,7 +68,7 @@ GITHUB_PAT     = os.environ.get("GH_PAT",              "")
 
 # ── Instance types ──────────────────────────────────────────
 PROCESSING_INSTANCE = "ml.t3.xlarge"
-TRAINING_INSTANCE   = "ml.t3.xlarge"
+TRAINING_INSTANCE   = "ml.t3.medium"
 
 
 def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pipeline:
