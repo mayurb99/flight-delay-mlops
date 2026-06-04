@@ -33,10 +33,8 @@ jobs:
       - name: Install dependencies
         run: uv pip install -r requirements.txt --system
 
-      
-
       - name: Unit tests — feature engineering
-        run: pytest tests/test_features.py -v --tb=short
+        run: pytest tests/test_features.py -v --tb=short --junitxml=test-results/features.xml
 
       - name: Data schema tests
         env:
@@ -44,18 +42,13 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION:            ${{ secrets.AWS_REGION }}
           S3_BUCKET:             ${{ secrets.S3_BUCKET }}
-        run: pytest tests/test_data.py -v --tb=short
+        run: pytest tests/test_data.py -v --tb=short --junitxml=test-results/data.xml
 
       - name: Model behavioral tests
         env:
           MLFLOW_TRACKING_URI:      ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
-        run: pytest tests/test_model.py -v --tb=short
+        run: pytest tests/test_model.py -v --tb=short --junitxml=test-results/model.xml
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ github.run_id }}
-          path: .pytest_cache/
+     

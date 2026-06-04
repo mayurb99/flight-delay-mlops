@@ -102,19 +102,20 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
 
     preprocessing_step = ProcessingStep(
         name="preprocess-flight-data",
-        processor=preprocessor,
-        code="src/preprocessing.py",
-        source_dir=".",
-        inputs=[ProcessingInput(
-            source=input_data_uri,
-            destination="/opt/ml/processing/input/raw",
-        )],
-        outputs=[
-            ProcessingOutput(output_name="train",     source="/opt/ml/processing/output/train"),
-            ProcessingOutput(output_name="val",       source="/opt/ml/processing/output/val"),
-            ProcessingOutput(output_name="test",      source="/opt/ml/processing/output/test"),
-            ProcessingOutput(output_name="reference", source="/opt/ml/processing/output/reference"),
-        ],
+        step_args=preprocessor.run(
+            code="src/preprocessing.py",
+            source_dir=".",
+            inputs=[ProcessingInput(
+                source=input_data_uri,
+                destination="/opt/ml/processing/input/raw",
+            )],
+            outputs=[
+                ProcessingOutput(output_name="train",     source="/opt/ml/processing/output/train"),
+                ProcessingOutput(output_name="val",       source="/opt/ml/processing/output/val"),
+                ProcessingOutput(output_name="test",      source="/opt/ml/processing/output/test"),
+                ProcessingOutput(output_name="reference", source="/opt/ml/processing/output/reference"),
+            ],
+        ),
         cache_config=cache_config,
     )
 
@@ -176,23 +177,24 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
 
     evaluation_step = ProcessingStep(
         name="evaluate-vs-champion",
-        processor=evaluator,
-        code="src/evaluate.py",
-        source_dir=".",
-        inputs=[
-            ProcessingInput(
-                source=training_step.properties.ModelArtifacts.S3ModelArtifacts,
-                destination="/opt/ml/processing/input/model",
-            ),
-            ProcessingInput(
-                source=preprocessing_step.properties
-                    .ProcessingOutputConfig.Outputs["val"].S3Output.S3Uri,
-                destination="/opt/ml/processing/input/val",
-            ),
-        ],
-        outputs=[
-            ProcessingOutput(output_name="eval", source="/opt/ml/processing/output/eval"),
-        ],
+        step_args=evaluator.run(
+            code="src/evaluate.py",
+            source_dir=".",
+            inputs=[
+                ProcessingInput(
+                    source=training_step.properties.ModelArtifacts.S3ModelArtifacts,
+                    destination="/opt/ml/processing/input/model",
+                ),
+                ProcessingInput(
+                    source=preprocessing_step.properties
+                        .ProcessingOutputConfig.Outputs["val"].S3Output.S3Uri,
+                    destination="/opt/ml/processing/input/val",
+                ),
+            ],
+            outputs=[
+                ProcessingOutput(output_name="eval", source="/opt/ml/processing/output/eval"),
+            ],
+        ),
         property_files=[eval_report],
     )
 
