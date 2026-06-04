@@ -1,1 +1,34 @@
+# Python
 .venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Data — never commit raw data to git, store in S3
+data/
+
+# Model artifacts
+*.pkl
+*.tar.gz
+mlruns/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# DVC (removed from project — using S3 versioning instead)
+.dvc/
+
+# AWS / secrets
+.env
+*.pem

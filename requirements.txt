@@ -10,4 +10,3 @@ requests>=2.31.0
 pytest>=7.4.4
 pytest-cov>=4.1.0
 flake8>=7.0.0
-dvc[s3]>=3.40.0
