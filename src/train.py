@@ -29,18 +29,29 @@ import logging
 import argparse
 import subprocess
 
-# Install packages missing from the SKLearnProcessor base container
-def _pip_install(package: str):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package, "-q"])
+# ── Install packages missing from SKLearnProcessor base container ──────
+# The sklearn container only has sklearn/numpy/pandas/scipy.
+# We install everything needed upfront so there are no mid-script surprises.
+_REQUIRED = ["mlflow>=2.10.0", "matplotlib>=3.8.0", "requests>=2.31.0"]
+for _pkg in _REQUIRED:
+    try:
+        __import__(_pkg.split(">=")[0].split("[")[0])
+    except ImportError:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", _pkg, "-q"],
+            stderr=subprocess.DEVNULL,
+        )
 
-try:
-    import mlflow
-except ImportError:
-    _pip_install("mlflow>=2.10.0")
-    import mlflow
+# ── sys.path: find features.py whether running locally or as ProcessingStep ─
+for _p in ["/opt/ml/processing/input/deps", os.path.dirname(os.path.abspath(__file__))]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
+import mlflow
+import mlflow.sklearn
 import numpy as np
 import pandas as pd
+
 try:
     import matplotlib
     matplotlib.use("Agg")
@@ -55,9 +66,6 @@ from sklearn.metrics import (
     recall_score, roc_auc_score, confusion_matrix,
 )
 
-import mlflow.sklearn
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from features import FEATURE_COLS, TARGET_COL
 
 logging.basicConfig(
