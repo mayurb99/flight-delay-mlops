@@ -29,6 +29,16 @@ import logging
 import argparse
 import subprocess
 
+# Install packages missing from the SKLearnProcessor base container
+def _pip_install(package: str):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package, "-q"])
+
+try:
+    import mlflow
+except ImportError:
+    _pip_install("mlflow>=2.10.0")
+    import mlflow
+
 import numpy as np
 import pandas as pd
 try:
@@ -45,7 +55,6 @@ from sklearn.metrics import (
     recall_score, roc_auc_score, confusion_matrix,
 )
 
-import mlflow
 import mlflow.sklearn
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
