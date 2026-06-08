@@ -107,7 +107,7 @@ def main():
     logger.info("=" * 60)
 
     # ── Setup MLflow ──────────────────────────────────
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "")
     if tracking_uri:
         mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()

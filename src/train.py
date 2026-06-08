@@ -32,7 +32,7 @@ import subprocess
 # ── Install packages missing from SKLearnProcessor base container ──────
 # The sklearn container only has sklearn/numpy/pandas/scipy.
 # We install everything needed upfront so there are no mid-script surprises.
-_REQUIRED = ["mlflow>=2.10.0", "matplotlib>=3.8.0", "requests>=2.31.0"]
+_REQUIRED = ["mlflow>=2.10.0,<3.0.0", "matplotlib>=3.8.0", "requests>=2.31.0"]
 for _pkg in _REQUIRED:
     try:
         __import__(_pkg.split(">=")[0].split("[")[0])
@@ -160,7 +160,7 @@ def main():
     logger.info("=" * 60)
 
     # ── Configure MLflow ──────────────────────────────
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "")
     if tracking_uri:
         mlflow.set_tracking_uri(tracking_uri)
         logger.info(f"MLflow tracking URI: {tracking_uri}")
@@ -241,13 +241,16 @@ def main():
             mlflow.log_artifact(fi_path, artifact_path="charts")
 
         # ── Save + log model ───────────────────────────
-        signature = mlflow.models.infer_signature(X_train, preds_val)
-        mlflow.sklearn.log_model(
-            sk_model        = model,
-            artifact_path   = "model",
-            signature       = signature,
-            registered_model_name = None,
-        )
+        try:
+            signature = mlflow.models.infer_signature(X_train, preds_val)
+            mlflow.sklearn.log_model(
+                sk_model              = model,
+                artifact_path         = "model",
+                signature             = signature,
+                registered_model_name = None,
+            )
+        except Exception as e:
+            logger.warning(f"mlflow.sklearn.log_model failed (non-fatal): {e}")
 
         # Save model.pkl
         model_pkl_path = os.path.join(args.model_dir, "model.pkl")
