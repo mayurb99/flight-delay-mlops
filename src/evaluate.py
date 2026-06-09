@@ -27,6 +27,16 @@ import json
 import tarfile
 import pickle
 import logging
+import subprocess
+
+# ── Install from requirements.txt when running in SageMaker ProcessingJob ──
+_req = "/opt/ml/processing/input/deps/requirements.txt"
+if os.path.exists(_req):
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-r", _req, "-q"],
+        stderr=subprocess.DEVNULL,
+    )
+
 import numpy as np
 import pandas as pd
 

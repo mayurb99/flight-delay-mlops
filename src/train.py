@@ -29,18 +29,13 @@ import logging
 import argparse
 import subprocess
 
-# ── Install packages missing from SKLearnProcessor base container ──────
-# The sklearn container only has sklearn/numpy/pandas/scipy.
-# We install everything needed upfront so there are no mid-script surprises.
-_REQUIRED = ["mlflow>=2.10.0,<3.0.0", "matplotlib>=3.8.0", "requests>=2.31.0"]
-for _pkg in _REQUIRED:
-    try:
-        __import__(_pkg.split(">=")[0].split("[")[0])
-    except ImportError:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", _pkg, "-q"],
-            stderr=subprocess.DEVNULL,
-        )
+# ── Install from requirements.txt when running in SageMaker ProcessingJob ──
+_req = "/opt/ml/processing/input/deps/requirements.txt"
+if os.path.exists(_req):
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-r", _req, "-q"],
+        stderr=subprocess.DEVNULL,
+    )
 
 # ── sys.path: find features.py whether running locally or as ProcessingStep ─
 for _p in ["/opt/ml/processing/input/deps", os.path.dirname(os.path.abspath(__file__))]:
