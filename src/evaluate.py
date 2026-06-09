@@ -7,17 +7,17 @@ Project Lecture 1: Foundation
 Runs as Step 3 of the SageMaker Pipeline.
 
 What this does:
-  1. Load metrics.json written by train.py
-  2. Fetch champion metrics from MLflow (model tagged 'champion')
+  1. Load challenger model + val data from SageMaker mounts
+  2. Fetch champion metrics from SageMaker Model Registry
+     (latest Approved package in MODEL_GROUP, reads its comparison.json from S3)
   3. Compare challenger vs champion on key metrics
-  4. Write comparison.json for ConditionStep to read
-  5. Writes accuracy.json in the exact path ConditionStep reads:
+  4. Write comparison.json for ConditionStep to read:
        metrics.challenger_beats_champion.value (1.0=yes, 0.0=no)
 
 SageMaker mounts:
   INPUT:  /opt/ml/processing/input/model/    (model.tar.gz)
           /opt/ml/processing/input/val/      (val.csv)
-  OUTPUT: /opt/ml/processing/output/eval/   (comparison.json, accuracy.json)
+  OUTPUT: /opt/ml/processing/output/eval/   (comparison.json)
 ════════════════════════════════════════════════════════
 """
 
@@ -37,13 +37,11 @@ if os.path.exists(_req):
         stderr=subprocess.DEVNULL,
     )
 
+import boto3
 import numpy as np
 import pandas as pd
 
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
-
-import mlflow
-from mlflow.tracking import MlflowClient
 
 for _p in ["/opt/ml/processing/input/deps", os.path.dirname(os.path.abspath(__file__))]:
     if _p not in sys.path:
@@ -63,26 +61,58 @@ VAL_INPUT    = "/opt/ml/processing/input/val"
 OUTPUT_PATH  = "/opt/ml/processing/output/eval"
 
 # ── Configuration ──────────────────────────────────────
-MODEL_NAME           = "flight-delay-model"
+MODEL_GROUP           = "flight-delay-model-group"
+REGION                = os.environ.get("AWS_REGION", "us-east-1")
 IMPROVEMENT_THRESHOLD = 0.01   # challenger must beat champion by 1%
 METRIC_TO_COMPARE     = "val_f1"  # primary comparison metric
 
 
-def get_champion_metrics(client: MlflowClient) -> dict:
+def get_champion_metrics(sm_client) -> dict:
     """
-    Fetch metrics of the current champion model from MLflow.
-    Champion is identified by the 'champion' alias.
-    Returns empty dict if no champion exists yet.
+    Fetch metrics of the current champion from SageMaker Model Registry.
+    Champion is the latest Approved model package in MODEL_GROUP.
+    Its metrics are read from the comparison.json attached at registration time.
+    Returns empty dict if no approved model exists yet (first run auto-wins).
     """
     try:
-        champion_version = client.get_model_version_by_alias(
-            name=MODEL_NAME, alias="champion"
+        resp = sm_client.list_model_packages(
+            ModelPackageGroupName=MODEL_GROUP,
+            ModelApprovalStatus="Approved",
+            SortBy="CreationTime",
+            SortOrder="Descending",
+            MaxResults=1,
         )
-        run = client.get_run(champion_version.run_id)
-        metrics = {k: v for k, v in run.data.metrics.items()}
-        logger.info(f"Champion: version={champion_version.version} "
-                    f"F1={metrics.get('val_f1', 'N/A')}")
-        return metrics
+        packages = resp.get("ModelPackageSummaryList", [])
+        if not packages:
+            logger.info("No approved champion found — challenger auto-wins first deployment")
+            return {}
+
+        champion_arn = packages[0]["ModelPackageArn"]
+        pkg = sm_client.describe_model_package(ModelPackageName=champion_arn)
+
+        stats_uri = (
+            pkg.get("ModelMetrics", {})
+               .get("ModelStatistics", {})
+               .get("S3Uri", "")
+        )
+        if not stats_uri:
+            logger.warning("Champion package has no ModelStatistics URI — treating as no champion")
+            return {}
+
+        # Parse s3://bucket/key and download comparison.json
+        path_parts = stats_uri.replace("s3://", "").split("/", 1)
+        bucket, key = path_parts[0], path_parts[1]
+        s3 = boto3.client("s3", region_name=REGION)
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        comparison = json.loads(obj["Body"].read())
+
+        # When the champion was registered it was the challenger — its metrics
+        # are stored under the "challenger" key in its own comparison.json.
+        champion_metrics = comparison.get("challenger", {})
+        logger.info(f"Champion (SageMaker Model Registry): "
+                    f"F1={champion_metrics.get('val_f1', 'N/A')}")
+        return champion_metrics
+
     except Exception as e:
         logger.info(f"No champion found ({e}) — challenger auto-wins first deployment")
         return {}
@@ -116,11 +146,8 @@ def main():
     logger.info(f"Comparison metric: {METRIC_TO_COMPARE}")
     logger.info("=" * 60)
 
-    # ── Setup MLflow ──────────────────────────────────
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "")
-    if tracking_uri:
-        mlflow.set_tracking_uri(tracking_uri)
-    client = MlflowClient()
+    # ── Setup SageMaker client ────────────────────────
+    sm_client = boto3.client("sagemaker", region_name=REGION)
 
     os.makedirs(OUTPUT_PATH, exist_ok=True)
 
@@ -145,7 +172,7 @@ def main():
     logger.info(f"Challenger metrics: {challenger_metrics}")
 
     # ── Get champion metrics ──────────────────────────
-    champion_metrics = get_champion_metrics(client)
+    champion_metrics = get_champion_metrics(sm_client)
 
     # ── Compare ───────────────────────────────────────
     challenger_score = challenger_metrics.get(METRIC_TO_COMPARE, 0.0)

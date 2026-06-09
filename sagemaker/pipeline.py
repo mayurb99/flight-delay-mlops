@@ -312,53 +312,6 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
     return pipeline
 
 
-def open_github_issue(run_id: str, metrics: dict):
-    """Open a GitHub issue when challenger is registered."""
-    if not all([GITHUB_OWNER, GITHUB_REPO, GITHUB_PAT]):
-        logger.info("GitHub issue creation skipped — GH_* env vars not set")
-        return
-
-    body = f"""## 🛫 New Flight Delay Model Ready for Review
-
-A new challenger model has been trained and registered.
-**It beats the current champion and is awaiting approval.**
-
-| Metric | Value |
-|--------|-------|
-| Val F1 | `{metrics.get('val_f1', 'N/A')}` |
-| Val AUC-ROC | `{metrics.get('val_auc_roc', 'N/A')}` |
-| Val Accuracy | `{metrics.get('val_accuracy', 'N/A')}` |
-
-**MLflow Run:** `{run_id}`
-
-### To Deploy
-1. Go to **AWS Console → SageMaker → Model Registry**
-2. Find `{MODEL_GROUP}` → find `PendingManualApproval` version
-3. Click **Actions → Approve**
-4. Deployment starts automatically via Lambda + GitHub Actions
-
-### To Reject
-Click **Actions → Reject** — the current champion stays deployed.
-"""
-    response = requests.post(
-        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/issues",
-        headers={
-            "Authorization": f"Bearer {GITHUB_PAT}",
-            "Accept": "application/vnd.github+json",
-        },
-        json={
-            "title": "🛫 New Flight Delay Model: Challenger Ready for Approval",
-            "body": body,
-            "labels": ["model-ready", "awaiting-approval"],
-        },
-    )
-    if response.status_code == 201:
-        issue_url = response.json()["html_url"]
-        logger.info(f"✓ GitHub issue opened: {issue_url}")
-    else:
-        logger.warning(f"Failed to open issue: {response.status_code} {response.text}")
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true",
