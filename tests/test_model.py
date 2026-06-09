@@ -3,19 +3,24 @@ tests/test_model.py
 ════════════════════════════════════════════════════════
 Flight Delay Prediction — Model Quality + Behavioral Tests
 
-Runs in: CI on every PR (loads champion from MLflow)
+Runs in: CI on every PR (loads champion from SageMaker Model Registry)
 Tests model interface, accuracy thresholds, and
 behavioral properties.
 
-TestModelInterface  — uses any_model (fallback if no MLflow, always runs)
-TestAccuracyThresholds — uses champion_model (skips if MLflow not configured)
-TestBehavioral      — uses any_model (always runs)
+TestModelInterface     — uses any_model (fallback if no champion, always runs)
+TestAccuracyThresholds — uses champion_model (skips if AWS not configured)
+TestBehavioral         — uses any_model (always runs)
 ════════════════════════════════════════════════════════
 """
 
+import io
 import os
 import sys
+import pickle
+import tarfile
+import tempfile
 import pytest
+import boto3
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
@@ -26,6 +31,9 @@ from src.features import FEATURE_COLS, TARGET_COL
 ACCURACY_THRESHOLD = 0.70
 F1_THRESHOLD = 0.55
 AUC_THRESHOLD = 0.70
+
+MODEL_GROUP = "flight-delay-model-group"
+REGION      = os.environ.get("AWS_REGION", "us-east-1")
 
 
 def make_features(**kwargs) -> pd.DataFrame:
@@ -42,26 +50,51 @@ def make_features(**kwargs) -> pd.DataFrame:
     return pd.DataFrame([defaults])[FEATURE_COLS]
 
 
+def _load_champion_from_sagemaker():
+    """
+    Download and unpickle the latest Approved model from SageMaker Model Registry.
+    Returns the model object, or raises if none found.
+    """
+    sm = boto3.client("sagemaker", region_name=REGION)
+    resp = sm.list_model_packages(
+        ModelPackageGroupName=MODEL_GROUP,
+        ModelApprovalStatus="Approved",
+        SortBy="CreationTime",
+        SortOrder="Descending",
+        MaxResults=1,
+    )
+    packages = resp.get("ModelPackageSummaryList", [])
+    if not packages:
+        raise LookupError("No approved model packages found in SageMaker Model Registry")
+
+    arn = packages[0]["ModelPackageArn"]
+    pkg = sm.describe_model_package(ModelPackageName=arn)
+    model_data_url = pkg["InferenceSpecification"]["Containers"][0]["ModelDataUrl"]
+
+    # model_data_url is s3://bucket/prefix/model.tar.gz
+    bucket, key = model_data_url.replace("s3://", "").split("/", 1)
+    s3 = boto3.client("s3", region_name=REGION)
+    buf = io.BytesIO(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        with tempfile.TemporaryDirectory() as tmp:
+            tar.extractall(tmp)
+            with open(os.path.join(tmp, "model.pkl"), "rb") as f:
+                return pickle.load(f)
+
+
 @pytest.fixture(scope="session")
 def champion_model():
     """
-    Load champion model from MLflow.
-    Skips all tests using this fixture if MLFLOW_TRACKING_URI is not set
-    or no champion model has been registered yet.
+    Load champion model from SageMaker Model Registry.
+    Skips all tests using this fixture if AWS is not configured
+    or no approved model exists yet.
     """
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
-    if not tracking_uri:
-        pytest.skip("MLFLOW_TRACKING_URI not set — skipping champion model tests")
+    if not os.environ.get("AWS_ACCESS_KEY_ID") and not os.environ.get("AWS_PROFILE"):
+        pytest.skip("AWS credentials not configured — skipping champion model tests")
 
     try:
-        import mlflow
-        from mlflow.tracking import MlflowClient
-
-        mlflow.set_tracking_uri(tracking_uri)
-        client = MlflowClient()
-        client.get_model_version_by_alias(name="flight-delay-model", alias="champion")
-        model_uri = "models:/flight-delay-model@champion"
-        return mlflow.sklearn.load_model(model_uri)
+        return _load_champion_from_sagemaker()
     except Exception as e:
         pytest.skip(f"Champion model not available: {e}")
 
@@ -70,21 +103,13 @@ def champion_model():
 def any_model():
     """
     Small model for interface and behavioral tests.
-    Tries to load the champion; falls back to a locally trained model
-    so these tests always run regardless of MLflow availability.
+    Tries to load the champion from SageMaker; falls back to a locally trained
+    model so these tests always run regardless of AWS availability.
     """
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
-    if tracking_uri:
-        try:
-            import mlflow
-            from mlflow.tracking import MlflowClient
-
-            mlflow.set_tracking_uri(tracking_uri)
-            client = MlflowClient()
-            client.get_model_version_by_alias(name="flight-delay-model", alias="champion")
-            return mlflow.sklearn.load_model("models:/flight-delay-model@champion")
-        except Exception:
-            pass
+    try:
+        return _load_champion_from_sagemaker()
+    except Exception:
+        pass
 
     print("\n  [test_model] No champion found — training small fallback for interface tests")
     from sklearn.ensemble import GradientBoostingClassifier
@@ -164,7 +189,7 @@ class TestModelInterface:
 
 
 class TestAccuracyThresholds:
-    """Skipped until a real champion model is registered in MLflow."""
+    """Skipped until a real champion model is approved in SageMaker Model Registry."""
 
     def test_accuracy(self, champion_model, val_df):
         X, y = val_df[FEATURE_COLS], val_df[TARGET_COL]
