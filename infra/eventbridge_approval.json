@@ -1,0 +1,17 @@
+{
+  "_comment": "EventBridge rule: fires when a model in flight-delay-model-group is Approved",
+  "_deploy": "See setup_p2_aws.sh — this file is used as input to aws events put-rule",
+
+  "Name": "flight-delay-model-approval",
+  "Description": "Fires when flight delay model package is approved in SageMaker Model Registry",
+  "EventPattern": {
+    "source": ["aws.sagemaker"],
+    "detail-type": ["SageMaker Model Package State Change"],
+    "detail": {
+      "ModelApprovalStatus": ["Approved"],
+      "ModelPackageGroupName": ["flight-delay-model-group"]
+    }
+  },
+  "State": "ENABLED",
+  "EventBusName": "default"
+}

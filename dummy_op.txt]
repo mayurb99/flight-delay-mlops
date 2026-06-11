@@ -107,3 +107,8 @@ Step 7: Creating SageMaker Model Package Group...
   aws s3 cp your_flights.csv s3://flight-delay-mlops-mayur/data/raw/flights_test.csv
   Then check GitHub Actions → train.yml should be running
 ════════════════════════════════════════════════════
+
+export AWS_REGION=us-east-1
+export S3_BUCKET=flight-delay-mlops-mayur
+export GH_OWNER=mayurb99
+export GH_REPO=flight-delay-mlops

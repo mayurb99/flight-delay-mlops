@@ -1,0 +1,526 @@
+name: Deploy — Blue/Green to SageMaker
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_package_arn:
+        description: "SageMaker Model Package ARN of the approved model"
+        required: true
+        type: string
+
+env:
+  AWS_REGION:     ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  ENDPOINT_NAME:  flight-delay-endpoint
+
+jobs:
+  deploy:
+    name: Build → Push → Blue/Green Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ──────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements.txt"
+
+      - name: Install dependencies
+        run: uv pip install -r requirements.txt --system
+
+      # ── 3. AWS credentials ───────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      # ── 4. Log deployment info ───────────────────────────────
+      - name: Log deployment info
+        run: |
+          echo "## Deployment Started" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Model Package ARN | ${{ inputs.model_package_arn }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Git SHA | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Endpoint | ${{ env.ENDPOINT_NAME }} |" >> $GITHUB_STEP_SUMMARY
+
+      # ── 5. Get model artifact URI from Model Registry ────────
+      - name: Get model artifact URI
+        id: model_info
+        env:
+          MODEL_PACKAGE_ARN: ${{ inputs.model_package_arn }}
+        run: |
+          python - <<'EOF'
+          import boto3, os, json, sys
+
+          arn    = os.environ["MODEL_PACKAGE_ARN"]
+          region = os.environ["AWS_REGION"]
+          client = boto3.client("sagemaker", region_name=region)
+
+          pkg = client.describe_model_package(ModelPackageName=arn)
+
+          # The model data URL is in the container definition
+          containers = pkg.get("InferenceSpecification", {}).get("Containers", [])
+          if not containers:
+              print("ERROR: No containers found in model package", file=sys.stderr)
+              sys.exit(1)
+
+          model_data_url = containers[0].get("ModelDataUrl", "")
+          if not model_data_url:
+              print("ERROR: No ModelDataUrl in container", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"Model data URL: {model_data_url}")
+
+          # Write to GitHub Actions output
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"model_data_url={model_data_url}\n")
+          EOF
+
+      # ── 6. Log in to ECR ─────────────────────────────────────
+      - name: Log in to Amazon ECR
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── 7. Build and push Docker image ───────────────────────
+      - name: Build and push inference image to ECR
+        id: build_image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr_login.outputs.registry }}
+          IMAGE_TAG:    ${{ github.sha }}
+        run: |
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          LATEST_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+
+          echo "Building image: ${IMAGE_URI}"
+          docker build \
+            --file Dockerfile \
+            --tag "${IMAGE_URI}" \
+            --tag "${LATEST_URI}" \
+            --cache-from "${LATEST_URI}" \
+            .
+
+          echo "Pushing image..."
+          docker push "${IMAGE_URI}"
+          docker push "${LATEST_URI}"
+
+          echo "image_uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
+          echo "✓ Image pushed: ${IMAGE_URI}"
+
+      # ── 8. Save previous image tag for rollback ───────────────
+      - name: Save current image tag to SSM (for rollback)
+        run: |
+          python - <<'EOF'
+          import boto3, os
+
+          region  = os.environ["AWS_REGION"]
+          bucket  = os.environ["S3_BUCKET"]
+          ssm     = boto3.client("ssm", region_name=region)
+          new_tag = os.environ["GITHUB_SHA"]
+
+          param_name = "flight-delay-current-image-tag"
+
+          # Read current tag → save as previous
+          try:
+              current = ssm.get_parameter(Name=param_name)["Parameter"]["Value"]
+              ssm.put_parameter(
+                  Name="flight-delay-previous-image-tag",
+                  Value=current,
+                  Type="String",
+                  Overwrite=True,
+              )
+              print(f"Saved previous image tag: {current}")
+          except ssm.exceptions.ParameterNotFound:
+              print("No previous image tag found (first deployment)")
+
+          # Save new current tag
+          ssm.put_parameter(
+              Name=param_name,
+              Value=new_tag,
+              Type="String",
+              Overwrite=True,
+          )
+          print(f"Saved current image tag: {new_tag}")
+          EOF
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+
+      # ── 9. Blue/Green Deploy ──────────────────────────────────
+      - name: Blue/Green deploy to SageMaker endpoint
+        id: deploy
+        env:
+          MODEL_DATA_URL:    ${{ steps.model_info.outputs.model_data_url }}
+          IMAGE_URI:         ${{ steps.build_image.outputs.image_uri }}
+          MODEL_PACKAGE_ARN: ${{ inputs.model_package_arn }}
+          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+        run: |
+          python - <<'EOF'
+          import boto3, os, json, sys, time
+
+          region         = os.environ["AWS_REGION"]
+          role_arn       = os.environ["SAGEMAKER_ROLE_ARN"]
+          endpoint_name  = os.environ["ENDPOINT_NAME"]
+          model_data_url = os.environ["MODEL_DATA_URL"]
+          image_uri      = os.environ["IMAGE_URI"]
+          git_sha        = os.environ["GITHUB_SHA"][:8]
+
+          sm = boto3.client("sagemaker", region_name=region)
+
+          # ── Create SageMaker Model object ───────────────────
+          model_name = f"flight-delay-{git_sha}"
+          print(f"Creating model: {model_name}")
+
+          try:
+              sm.create_model(
+                  ModelName=model_name,
+                  ExecutionRoleArn=role_arn,
+                  PrimaryContainer={
+                      "Image":        image_uri,
+                      "ModelDataUrl": model_data_url,
+                      "Environment": {
+                          "SAGEMAKER_PROGRAM":    "app.py",
+                          "SAGEMAKER_SUBMIT_DIR": "/opt/program",
+                      },
+                  },
+              )
+              print(f"✓ Model created: {model_name}")
+          except sm.exceptions.ClientError as e:
+              if "already exists" in str(e):
+                  print(f"Model {model_name} already exists — reusing")
+              else:
+                  raise
+
+          # ── Check if endpoint exists ─────────────────────────
+          endpoint_exists = False
+          try:
+              sm.describe_endpoint(EndpointName=endpoint_name)
+              endpoint_exists = True
+              print(f"Endpoint exists: {endpoint_name} → Blue/Green update")
+          except sm.exceptions.ClientError:
+              print(f"Endpoint does not exist → first deployment")
+
+          if endpoint_exists:
+              # ── BLUE/GREEN UPDATE ────────────────────────────
+              # Current variant is BLUE (production traffic)
+              # Create new config with GREEN variant at 0% traffic
+              green_config_name = f"{endpoint_name}-green-{git_sha}"
+
+              sm.create_endpoint_config(
+                  EndpointConfigName=green_config_name,
+                  ProductionVariants=[
+                      {
+                          "VariantName":           "green",
+                          "ModelName":             model_name,
+                          "InitialInstanceCount":  1,
+                          "InstanceType":          "ml.t2.medium",
+                          "InitialVariantWeight":  0,  # 0% traffic initially
+                      },
+                  ],
+              )
+              print(f"✓ Green endpoint config created: {green_config_name}")
+
+              # Get current config to keep blue variant details
+              current_endpoint = sm.describe_endpoint(EndpointName=endpoint_name)
+              current_config_name = current_endpoint["EndpointConfigName"]
+              current_config = sm.describe_endpoint_config(
+                  EndpointConfigName=current_config_name
+              )
+
+              # Create combined blue+green config
+              blue_variant = current_config["ProductionVariants"][0].copy()
+              blue_variant["VariantName"] = "blue"
+
+              combined_config_name = f"{endpoint_name}-bluegreen-{git_sha}"
+              sm.create_endpoint_config(
+                  EndpointConfigName=combined_config_name,
+                  ProductionVariants=[
+                      blue_variant,
+                      {
+                          "VariantName":           "green",
+                          "ModelName":             model_name,
+                          "InitialInstanceCount":  1,
+                          "InstanceType":          "ml.t2.medium",
+                          "InitialVariantWeight":  0,
+                      },
+                  ],
+              )
+
+              # Update endpoint with blue+green config
+              sm.update_endpoint(
+                  EndpointName=endpoint_name,
+                  EndpointConfigName=combined_config_name,
+              )
+              print("Waiting for endpoint update (blue+green)...")
+              waiter = sm.get_waiter("endpoint_in_service")
+              waiter.wait(
+                  EndpointName=endpoint_name,
+                  WaiterConfig={"Delay": 15, "MaxAttempts": 60},
+              )
+              print("✓ Blue+Green endpoint ready")
+
+              # Save config names for later steps
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"combined_config={combined_config_name}\n")
+                  f.write(f"green_model={model_name}\n")
+                  f.write(f"is_update=true\n")
+
+          else:
+              # ── FIRST DEPLOYMENT ─────────────────────────────
+              initial_config_name = f"{endpoint_name}-initial-{git_sha}"
+              sm.create_endpoint_config(
+                  EndpointConfigName=initial_config_name,
+                  ProductionVariants=[{
+                      "VariantName":           "primary",
+                      "ModelName":             model_name,
+                      "InitialInstanceCount":  1,
+                      "InstanceType":          "ml.t2.medium",
+                      "InitialVariantWeight":  1,
+                  }],
+              )
+              sm.create_endpoint(
+                  EndpointName=endpoint_name,
+                  EndpointConfigName=initial_config_name,
+              )
+              print(f"Creating endpoint {endpoint_name}...")
+              waiter = sm.get_waiter("endpoint_in_service")
+              waiter.wait(
+                  EndpointName=endpoint_name,
+                  WaiterConfig={"Delay": 15, "MaxAttempts": 80},
+              )
+              print(f"✓ Endpoint created: {endpoint_name}")
+
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"green_model={model_name}\n")
+                  f.write(f"is_update=false\n")
+          EOF
+
+      # ── 10. Smoke test on Green variant ──────────────────────
+      - name: Smoke test Green variant
+        id: smoke_test
+        env:
+          IS_UPDATE: ${{ steps.deploy.outputs.is_update }}
+        run: |
+          python - <<'EOF'
+          import boto3, json, os, sys
+
+          region        = os.environ["AWS_REGION"]
+          endpoint_name = os.environ["ENDPOINT_NAME"]
+          is_update     = os.environ.get("IS_UPDATE", "false") == "true"
+
+          sm_runtime = boto3.client("sagemaker-runtime", region_name=region)
+
+          test_payload = json.dumps({
+              "FL_DATE":          "2024-06-15",
+              "OP_CARRIER":       "AA",
+              "ORIGIN":           "JFK",
+              "DEST":             "LAX",
+              "CRS_DEP_TIME":     900,
+              "CRS_ARR_TIME":     1230,
+              "CRS_ELAPSED_TIME": 360,
+              "DISTANCE":         2475,
+          })
+
+          invoke_kwargs = {
+              "EndpointName": endpoint_name,
+              "ContentType":  "application/json",
+              "Body":         test_payload,
+          }
+
+          # For Blue/Green update: target Green variant directly
+          if is_update:
+              invoke_kwargs["TargetVariant"] = "green"
+              print("Smoke testing GREEN variant directly (0% traffic)")
+          else:
+              print("Smoke testing PRIMARY variant (first deployment)")
+
+          try:
+              response = sm_runtime.invoke_endpoint(**invoke_kwargs)
+              result = json.loads(response["Body"].read())
+              print(f"Smoke test result: {json.dumps(result, indent=2)}")
+
+              # Validate response schema
+              assert "delayed"           in result, "Missing 'delayed' field"
+              assert "delay_probability" in result, "Missing 'delay_probability' field"
+              assert "risk_level"        in result, "Missing 'risk_level' field"
+              assert result["delayed"]   in (0, 1), f"Invalid delayed value: {result['delayed']}"
+              assert 0.0 <= result["delay_probability"] <= 1.0, \
+                  f"Invalid probability: {result['delay_probability']}"
+
+              print("✓ Smoke test PASSED")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("smoke_passed=true\n")
+
+          except Exception as e:
+              print(f"✗ Smoke test FAILED: {e}", file=sys.stderr)
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("smoke_passed=false\n")
+              sys.exit(1)
+          EOF
+
+      # ── 11a. Smoke PASSED → shift 100% traffic to Green ──────
+      - name: Shift 100% traffic to Green (smoke test passed)
+        if: steps.smoke_test.outputs.smoke_passed == 'true' && steps.deploy.outputs.is_update == 'true'
+        run: |
+          python - <<'EOF'
+          import boto3, os, json
+
+          region        = os.environ["AWS_REGION"]
+          endpoint_name = os.environ["ENDPOINT_NAME"]
+          git_sha       = os.environ["GITHUB_SHA"][:8]
+          green_model   = os.environ["GREEN_MODEL"]
+          role_arn      = os.environ["SAGEMAKER_ROLE_ARN"]
+
+          sm = boto3.client("sagemaker", region_name=region)
+
+          # Create final config — Green only at 100% traffic
+          final_config_name = f"{endpoint_name}-green-only-{git_sha}"
+          sm.create_endpoint_config(
+              EndpointConfigName=final_config_name,
+              ProductionVariants=[{
+                  "VariantName":          "primary",
+                  "ModelName":            green_model,
+                  "InitialInstanceCount": 1,
+                  "InstanceType":         "ml.t2.medium",
+                  "InitialVariantWeight": 1,
+              }],
+          )
+
+          # Update endpoint — Blue is gone, Green becomes primary
+          sm.update_endpoint(
+              EndpointName=endpoint_name,
+              EndpointConfigName=final_config_name,
+          )
+          print("Waiting for traffic shift to complete...")
+          waiter = sm.get_waiter("endpoint_in_service")
+          waiter.wait(
+              EndpointName=endpoint_name,
+              WaiterConfig={"Delay": 15, "MaxAttempts": 60},
+          )
+          print("✓ 100% traffic now on Green variant")
+          print(f"✓ Blue variant removed — endpoint running new model only")
+          EOF
+        env:
+          GREEN_MODEL:        ${{ steps.deploy.outputs.green_model }}
+          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+
+      # ── 11b. Smoke FAILED → delete Green, keep Blue ──────────
+      - name: Rollback — delete Green, keep Blue (smoke test failed)
+        if: failure() && steps.deploy.outputs.is_update == 'true'
+        run: |
+          python - <<'EOF'
+          import boto3, os
+
+          region        = os.environ["AWS_REGION"]
+          endpoint_name = os.environ["ENDPOINT_NAME"]
+          git_sha       = os.environ["GITHUB_SHA"][:8]
+          role_arn      = os.environ["SAGEMAKER_ROLE_ARN"]
+
+          sm = boto3.client("sagemaker", region_name=region)
+
+          # Get the blue-only config (the one before our update)
+          endpoint       = sm.describe_endpoint(EndpointName=endpoint_name)
+          current_config = sm.describe_endpoint_config(
+              EndpointConfigName=endpoint["EndpointConfigName"]
+          )
+
+          # Find the blue variant
+          blue_variants = [
+              v for v in current_config["ProductionVariants"]
+              if v["VariantName"] == "blue"
+          ]
+
+          if blue_variants:
+              # Restore Blue-only endpoint config
+              blue_config_name = f"{endpoint_name}-blue-restore-{git_sha}"
+              blue_variant = blue_variants[0].copy()
+              blue_variant["VariantName"] = "primary"
+
+              sm.create_endpoint_config(
+                  EndpointConfigName=blue_config_name,
+                  ProductionVariants=[blue_variant],
+              )
+              sm.update_endpoint(
+                  EndpointName=endpoint_name,
+                  EndpointConfigName=blue_config_name,
+              )
+              waiter = sm.get_waiter("endpoint_in_service")
+              waiter.wait(
+                  EndpointName=endpoint_name,
+                  WaiterConfig={"Delay": 15, "MaxAttempts": 60},
+              )
+              print("✓ ROLLBACK COMPLETE — Blue variant restored at 100% traffic")
+          else:
+              print("No blue variant found — endpoint unchanged")
+          EOF
+        env:
+          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+
+      # ── 12. Setup SageMaker Model Monitor ────────────────────
+      - name: Setup SageMaker Model Monitor
+        if: steps.smoke_test.outputs.smoke_passed == 'true'
+        env:
+          SAGEMAKER_ROLE_ARN: ${{ secrets.SAGEMAKER_ROLE_ARN }}
+          S3_BUCKET:          ${{ secrets.S3_BUCKET }}
+          ENDPOINT_NAME:      ${{ env.ENDPOINT_NAME }}
+        run: |
+          # Find the reference.csv S3 URI from the most recent preprocessing output
+          REFERENCE_URI=$(python - <<'EOF'
+          import boto3, os
+
+          region = os.environ["AWS_REGION"]
+          bucket = os.environ["S3_BUCKET"]
+          s3     = boto3.client("s3", region_name=region)
+
+          # Find reference.csv in the most recent preprocessing output
+          resp = s3.list_objects_v2(
+              Bucket=bucket,
+              Prefix="",
+          )
+          # Look for reference.csv in any SageMaker processing output path
+          ref_keys = [
+              obj["Key"] for obj in resp.get("Contents", [])
+              if obj["Key"].endswith("reference.csv")
+          ]
+          if ref_keys:
+              # Use most recent (last alphabetically = most recent timestamp)
+              ref_key = sorted(ref_keys)[-1]
+              print(f"s3://{bucket}/{ref_key}")
+          else:
+              print(f"s3://{bucket}/monitoring/reference/reference.csv")
+          EOF
+          )
+
+          echo "Reference URI: $REFERENCE_URI"
+          python sagemaker/setup_monitor.py \
+            --endpoint-name "${{ env.ENDPOINT_NAME }}" \
+            --reference-uri "$REFERENCE_URI"
+
+      # ── 13. Post deployment summary ──────────────────────────
+      - name: Post deployment summary
+        if: always()
+        run: |
+          STATUS="${{ steps.smoke_test.outputs.smoke_passed == 'true' && 'SUCCESS' || 'FAILED' }}"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment ${STATUS}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Model Package | ${{ inputs.model_package_arn }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | ${{ steps.build_image.outputs.image_uri }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Endpoint | ${{ env.ENDPOINT_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Smoke Test | ${{ steps.smoke_test.outputs.smoke_passed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Git SHA | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
