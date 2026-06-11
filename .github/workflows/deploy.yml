@@ -204,34 +204,28 @@ jobs:
               else:
                   raise
 
-          # ── Check if endpoint exists ─────────────────────────
+          # ── Check if endpoint exists (and is healthy) ────────
           endpoint_exists = False
           try:
-              sm.describe_endpoint(EndpointName=endpoint_name)
-              endpoint_exists = True
-              print(f"Endpoint exists: {endpoint_name} → Blue/Green update")
+              resp   = sm.describe_endpoint(EndpointName=endpoint_name)
+              status = resp["EndpointStatus"]
+              if status == "Failed":
+                  print(f"Endpoint {endpoint_name} is Failed — deleting for fresh deployment")
+                  sm.delete_endpoint(EndpointName=endpoint_name)
+                  waiter = sm.get_waiter("endpoint_deleted")
+                  waiter.wait(EndpointName=endpoint_name,
+                              WaiterConfig={"Delay": 10, "MaxAttempts": 60})
+                  print("Deleted failed endpoint — treating as first deployment")
+              else:
+                  endpoint_exists = True
+                  print(f"Endpoint exists: {endpoint_name} ({status}) → Blue/Green update")
           except sm.exceptions.ClientError:
               print(f"Endpoint does not exist → first deployment")
 
           if endpoint_exists:
               # ── BLUE/GREEN UPDATE ────────────────────────────
-              # Current variant is BLUE (production traffic)
-              # Create new config with GREEN variant at 0% traffic
-              green_config_name = f"{endpoint_name}-green-{git_sha}"
-
-              sm.create_endpoint_config(
-                  EndpointConfigName=green_config_name,
-                  ProductionVariants=[
-                      {
-                          "VariantName":           "green",
-                          "ModelName":             model_name,
-                          "InitialInstanceCount":  1,
-                          "InstanceType":          "ml.t2.medium",
-                          "InitialVariantWeight":  0,  # 0% traffic initially
-                      },
-                  ],
-              )
-              print(f"✓ Green endpoint config created: {green_config_name}")
+              # Current variant is BLUE (100% traffic)
+              # New combined config adds GREEN at 0% traffic
 
               # Get current config to keep blue variant details
               current_endpoint = sm.describe_endpoint(EndpointName=endpoint_name)
