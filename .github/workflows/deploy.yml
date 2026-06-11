@@ -243,6 +243,7 @@ jobs:
               # Create combined blue+green config
               blue_variant = current_config["ProductionVariants"][0].copy()
               blue_variant["VariantName"] = "blue"
+              blue_variant["InitialVariantWeight"] = 1  # must be >0; green starts at 0
 
               combined_config_name = f"{endpoint_name}-bluegreen-{git_sha}"
               sm.create_endpoint_config(
