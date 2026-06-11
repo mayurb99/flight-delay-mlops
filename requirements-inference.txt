@@ -1,6 +1,6 @@
 # requirements-inference.txt
 # Dependencies for the inference Docker container ONLY
 # Keep this minimal — image size matters for cold start time
-pandas>=2.1.4
-numpy>=1.26.3
+pandas>=2.1.4,<3.0
+numpy==1.26.4
 scikit-learn==1.2.1
