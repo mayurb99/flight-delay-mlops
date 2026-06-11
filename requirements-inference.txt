@@ -3,4 +3,4 @@
 # Keep this minimal — image size matters for cold start time
 pandas>=2.1.4
 numpy>=1.26.3
-scikit-learn>=1.3.2
+scikit-learn==1.2.1
