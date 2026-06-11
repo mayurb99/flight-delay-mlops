@@ -52,10 +52,14 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # features.py must be alongside app.py so the import works
 COPY src/features.py          ./features.py
 COPY src/inference/app.py     ./app.py
+COPY src/inference/serve      ./serve
 
 # SageMaker model artefacts are mounted at /opt/ml/model/
 # The app looks there first for model.pkl or model.tar.gz
 # Do NOT copy model here — it is provided at runtime by SageMaker
+
+# Make serve executable while still root
+RUN chmod +x ./serve
 
 # Non-root user for security
 RUN useradd --create-home --shell /bin/bash appuser
@@ -68,11 +72,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/ping')"
 
-# Start uvicorn
-# --workers 1: single worker (SageMaker manages scaling via endpoint variants)
-# --timeout-keep-alive 75: matches SageMaker's 80s idle connection timeout
-CMD ["uvicorn", "app:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8080", \
-     "--workers", "1", \
-     "--timeout-keep-alive", "75"]
+# SageMaker invokes the container as: docker run <image> serve
+# /opt/program must be on PATH so the 'serve' command is found
+ENV PATH="/opt/program:${PATH}"
+CMD ["serve"]
