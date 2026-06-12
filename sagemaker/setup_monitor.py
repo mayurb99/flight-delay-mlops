@@ -309,9 +309,9 @@ def main():
 
     monitor = DefaultModelMonitor(
         role=ROLE_ARN,
-        instance_type="ml.m5.xlarge",
+        instance_type="ml.t3.xlarge",
         instance_count=1,
-        max_runtime_in_seconds=1800,
+        max_runtime_in_seconds=2400,
         sagemaker_session=sm_session,
     )
 
