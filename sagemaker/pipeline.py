@@ -110,7 +110,7 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
                 input_name="deps",
             ),
             ProcessingInput(
-                source="requirements.txt",
+                source="requirements-train.txt",
                 destination="/opt/ml/processing/input/reqs",
                 input_name="requirements",
             ),
@@ -154,7 +154,7 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
                 input_name="deps",
             ),
             ProcessingInput(
-                source="requirements.txt",
+                source="requirements-train.txt",
                 destination="/opt/ml/processing/input/reqs",
                 input_name="requirements",
             ),
@@ -224,7 +224,7 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
                 input_name="deps",
             ),
             ProcessingInput(
-                source="requirements.txt",
+                source="requirements-train.txt",
                 destination="/opt/ml/processing/input/reqs",
                 input_name="requirements",
             ),
