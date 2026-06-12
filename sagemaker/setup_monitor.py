@@ -321,21 +321,27 @@ def main():
     # Phase 2: DataCapture
     update_endpoint_data_capture(sm_client, endpoint_name, capture_s3_uri)
 
-    # Phase 3: Schedule
-    create_monitoring_schedule(
-        monitor, endpoint_name, baseline_output_uri, reports_s3_uri
-    )
-
-    # CloudWatch alarm
-    create_cloudwatch_alarm(cw_client, endpoint_name)
-
-    logger.info("=" * 60)
-    logger.info("✓ SageMaker Model Monitor setup complete!")
-    logger.info(f"  Baseline stored at    : {baseline_output_uri}")
-    logger.info(f"  Predictions captured  : {capture_s3_uri}")
-    logger.info(f"  Daily reports at      : {reports_s3_uri}")
-    logger.info(f"  CloudWatch alarm      : {endpoint_name}-monitor-violations")
-    logger.info("=" * 60)
+    # Phase 3: Schedule — only if baseline statistics.json already exists.
+    # On the first deploy the baseline job is still running, so we skip here.
+    # On the next deploy run baseline_exists() returns True and the schedule is created.
+    if baseline_exists(s3_client, baseline_output_uri):
+        create_monitoring_schedule(
+            monitor, endpoint_name, baseline_output_uri, reports_s3_uri
+        )
+        create_cloudwatch_alarm(cw_client, endpoint_name)
+        logger.info("=" * 60)
+        logger.info("✓ SageMaker Model Monitor setup complete!")
+        logger.info(f"  Baseline stored at    : {baseline_output_uri}")
+        logger.info(f"  Predictions captured  : {capture_s3_uri}")
+        logger.info(f"  Daily reports at      : {reports_s3_uri}")
+        logger.info(f"  CloudWatch alarm      : {endpoint_name}-monitor-violations")
+        logger.info("=" * 60)
+    else:
+        logger.info("=" * 60)
+        logger.info("✓ Phase 1 + 2 complete. Baseline job still running in background.")
+        logger.info("  Phase 3 (monitoring schedule) will run on the next deploy.")
+        logger.info(f"  Watch: aws s3 ls {baseline_output_uri}/statistics.json")
+        logger.info("=" * 60)
 
 
 if __name__ == "__main__":
