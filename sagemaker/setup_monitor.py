@@ -45,10 +45,22 @@ S3_BUCKET      = os.environ.get("S3_BUCKET",          "")
 ENDPOINT_NAME  = os.environ.get("ENDPOINT_NAME",      "flight-delay-endpoint")
 
 
+def baseline_exists(s3_client, baseline_output_uri: str) -> bool:
+    """Check if baseline statistics.json already exists in S3."""
+    path = baseline_output_uri.replace("s3://", "").split("/", 1)
+    bucket, prefix = path[0], path[1].rstrip("/") + "/statistics.json"
+    try:
+        s3_client.head_object(Bucket=bucket, Key=prefix)
+        return True
+    except Exception:
+        return False
+
+
 def run_baseline_job(
     monitor: DefaultModelMonitor,
     reference_s3_uri: str,
     baseline_output_uri: str,
+    s3_client=None,
 ) -> None:
     """
     Phase 1: Run a baseline job once on the training reference data.
@@ -60,13 +72,15 @@ def run_baseline_job(
     These files define what "normal" looks like for this model.
     All future monitoring runs compare against this baseline.
 
-    Parameters
-    ----------
-    monitor            : DefaultModelMonitor instance
-    reference_s3_uri   : S3 URI of reference.csv from preprocessing step
-    baseline_output_uri: S3 URI where statistics.json and constraints.json are written
+    Skips if baseline already exists. Submits async (wait=False) so CI
+    doesn't block — the job runs in SageMaker in the background.
     """
-    logger.info("Phase 1: Running baseline job...")
+    if s3_client and baseline_exists(s3_client, baseline_output_uri):
+        logger.info("✓ Baseline already exists — skipping baseline job")
+        logger.info(f"  {baseline_output_uri}/statistics.json")
+        return
+
+    logger.info("Phase 1: Submitting baseline job (async)...")
     logger.info(f"  Reference data: {reference_s3_uri}")
     logger.info(f"  Baseline output: {baseline_output_uri}")
 
@@ -74,12 +88,11 @@ def run_baseline_job(
         baseline_dataset=reference_s3_uri,
         dataset_format=DatasetFormat.csv(header=True),
         output_s3_uri=baseline_output_uri,
-        wait=True,
+        wait=False,
         logs=False,
     )
-    logger.info("✓ Baseline job complete")
-    logger.info(f"  statistics.json  → {baseline_output_uri}/statistics.json")
-    logger.info(f"  constraints.json → {baseline_output_uri}/constraints.json")
+    logger.info("✓ Baseline job submitted (running in background)")
+    logger.info(f"  Results will appear at: {baseline_output_uri}/statistics.json")
 
 
 def update_endpoint_data_capture(
@@ -291,18 +304,19 @@ def main():
     boto_session = boto3.Session(region_name=REGION)
     sm_session   = sagemaker.Session(boto_session=boto_session)
     sm_client    = boto3.client("sagemaker",    region_name=REGION)
+    s3_client    = boto3.client("s3",           region_name=REGION)
     cw_client    = boto3.client("cloudwatch",   region_name=REGION)
 
     monitor = DefaultModelMonitor(
         role=ROLE_ARN,
-        instance_type="ml.t3.medium",
+        instance_type="ml.m5.xlarge",
         instance_count=1,
-        max_runtime_in_seconds=3600,
+        max_runtime_in_seconds=1800,
         sagemaker_session=sm_session,
     )
 
-    # Phase 1: Baseline
-    run_baseline_job(monitor, reference_uri, baseline_output_uri)
+    # Phase 1: Baseline (async — skips if already exists)
+    run_baseline_job(monitor, reference_uri, baseline_output_uri, s3_client=s3_client)
 
     # Phase 2: DataCapture
     update_endpoint_data_capture(sm_client, endpoint_name, capture_s3_uri)
