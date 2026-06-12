@@ -472,34 +472,16 @@ jobs:
           S3_BUCKET:          ${{ secrets.S3_BUCKET }}
           ENDPOINT_NAME:      ${{ env.ENDPOINT_NAME }}
         run: |
-          # Find the reference.csv S3 URI from the most recent preprocessing output
-          REFERENCE_URI=$(python - <<'EOF'
-          import boto3, os
-
-          region = os.environ["AWS_REGION"]
-          bucket = os.environ["S3_BUCKET"]
-          s3     = boto3.client("s3", region_name=region)
-
-          # Find reference.csv in the most recent preprocessing output
-          resp = s3.list_objects_v2(
-              Bucket=bucket,
-              Prefix="",
-          )
-          # Look for reference.csv in any SageMaker processing output path
-          ref_keys = [
-              obj["Key"] for obj in resp.get("Contents", [])
-              if obj["Key"].endswith("reference.csv")
-          ]
-          if ref_keys:
-              # Use most recent (last alphabetically = most recent timestamp)
-              ref_key = sorted(ref_keys)[-1]
-              print(f"s3://{bucket}/{ref_key}")
-          else:
-              print(f"s3://{bucket}/monitoring/reference/reference.csv")
-          EOF
-          )
-
+          # reference.csv is written to a fixed path by preprocessing.py
+          REFERENCE_URI="s3://${{ secrets.S3_BUCKET }}/monitoring/reference/reference.csv"
           echo "Reference URI: $REFERENCE_URI"
+
+          # Verify the file exists before running the monitor setup
+          if ! aws s3 ls "$REFERENCE_URI" > /dev/null 2>&1; then
+            echo "reference.csv not found — skipping monitoring setup (run training pipeline first)"
+            exit 0
+          fi
+
           python sagemaker/setup_monitor.py \
             --endpoint-name "${{ env.ENDPOINT_NAME }}" \
             --reference-uri "$REFERENCE_URI"

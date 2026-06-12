@@ -141,7 +141,19 @@ def main():
         n=min(5000, len(df_train)),
         random_state=args.random_state,
     )
-    df_reference.to_csv(os.path.join(OUTPUT_REF, "reference.csv"), index=False)
+    ref_local = os.path.join(OUTPUT_REF, "reference.csv")
+    df_reference.to_csv(ref_local, index=False)
+
+    # Also copy to a fixed S3 location so deploy.yml always knows where to find it
+    s3_bucket = os.environ.get("S3_BUCKET", "")
+    if s3_bucket:
+        import boto3
+        boto3.client("s3").upload_file(
+            ref_local,
+            s3_bucket,
+            "monitoring/reference/reference.csv",
+        )
+        logger.info(f"  Reference → s3://{s3_bucket}/monitoring/reference/reference.csv")
 
     # Feature stats JSON
     with open(os.path.join(OUTPUT_REF, "feature_stats.json"), "w") as f:

@@ -96,6 +96,7 @@ def create_pipeline(sm_session: sagemaker.Session, dry_run: bool = False) -> Pip
             "MLFLOW_TRACKING_URI":      os.environ.get("MLFLOW_TRACKING_URI", ""),
             "MLFLOW_TRACKING_USERNAME": os.environ.get("MLFLOW_TRACKING_USERNAME", ""),
             "MLFLOW_TRACKING_PASSWORD": os.environ.get("MLFLOW_TRACKING_PASSWORD", ""),
+            "S3_BUCKET":                S3_BUCKET,
         },
     )
 
