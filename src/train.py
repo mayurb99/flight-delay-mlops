@@ -30,7 +30,7 @@ import argparse
 import subprocess
 
 # ── Install from requirements.txt when running in SageMaker ProcessingJob ──
-_req = "/opt/ml/processing/input/reqs/requirements.txt"
+_req = "/opt/ml/processing/input/reqs/requirements-train.txt"
 if os.path.exists(_req):
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "-r", _req, "-q"],
